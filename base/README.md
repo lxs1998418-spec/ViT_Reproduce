@@ -2,7 +2,7 @@
 
 A PyTorch implementation of Vision Transformer (ViT) from scratch, based on the paper ["An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale"](https://arxiv.org/abs/2010.11929).
 
-This implementation does **not** use pre-trained weights and trains the model from scratch.
+This implementation supports both training from scratch and loading pretrained weights from the `timm` library.
 
 ## Features
 
@@ -52,8 +52,7 @@ data/
 
 ### Training
 
-Train a ViT model from scratch:
-
+**Train from scratch:**
 ```bash
 python train.py \
     --data_dir /path/to/your/data \
@@ -61,6 +60,18 @@ python train.py \
     --batch_size 32 \
     --epochs 100 \
     --lr 0.001 \
+    --save_dir ./checkpoints
+```
+
+**Train with pretrained weights (recommended for faster convergence):**
+```bash
+python train.py \
+    --data_dir /path/to/your/data \
+    --model vit_base \
+    --batch_size 32 \
+    --epochs 100 \
+    --lr 0.001 \
+    --pretrained \
     --save_dir ./checkpoints
 ```
 
@@ -76,11 +87,11 @@ python train.py \
 - `--num_workers`: Number of data loading workers (default: 4)
 - `--img_size`: Image size (default: 224)
 - `--resume`: Path to checkpoint to resume training from (optional)
+- `--pretrained`: Load pretrained weights from timm (default: False)
 
 ### Evaluation
 
-Evaluate a trained model:
-
+**Evaluate a trained checkpoint:**
 ```bash
 python eval.py \
     --checkpoint ./checkpoints/best.pth \
@@ -89,13 +100,23 @@ python eval.py \
     --batch_size 32
 ```
 
+**Evaluate using pretrained weights directly:**
+```bash
+python eval.py \
+    --pretrained \
+    --data_dir /path/to/validation/data \
+    --model vit_base \
+    --batch_size 32
+```
+
 **Arguments:**
-- `--checkpoint`: Path to model checkpoint
+- `--checkpoint`: Path to model checkpoint (optional if using `--pretrained`)
 - `--data_dir`: Path to evaluation dataset directory
-- `--model`: Model architecture (must match the checkpoint)
+- `--model`: Model architecture (must match the checkpoint or pretrained model)
 - `--batch_size`: Batch size for evaluation (default: 32)
 - `--num_workers`: Number of data loading workers (default: 4)
 - `--img_size`: Image size (default: 224)
+- `--pretrained`: Use pretrained weights from timm (ignores `--checkpoint`)
 
 ### Model Architectures
 
@@ -147,12 +168,30 @@ python train.py \
     --save_dir ./checkpoints
 ```
 
+## Pretrained Weights
+
+This implementation supports loading pretrained weights from the `timm` library. The pretrained weights are automatically downloaded from Hugging Face when you use the `--pretrained` flag.
+
+**Benefits of using pretrained weights:**
+- Faster convergence during training
+- Better performance, especially on small datasets
+- Can be fine-tuned for your specific task
+
+**Supported pretrained models:**
+- `vit_small_patch16_224`: ViT-Small pretrained on ImageNet-1k
+- `vit_base_patch16_224`: ViT-Base pretrained on ImageNet-1k
+- `vit_large_patch16_224`: ViT-Large pretrained on ImageNet-1k
+
+When using pretrained weights with a different number of classes, the classification head will be initialized appropriately:
+- If your dataset has fewer classes, the head will use the first N classes from the pretrained head
+- If your dataset has more classes, the head will be extended with the pretrained weights for the first 1000 classes
+
 ## Notes
 
-- This implementation trains from scratch without pre-trained weights
-- For best results, use large datasets (e.g., ImageNet)
-- Training ViT from scratch typically requires many epochs and large datasets
+- **Training from scratch**: Requires large datasets (e.g., ImageNet) and many epochs
+- **Using pretrained weights**: Recommended for most use cases, especially with smaller datasets
 - Consider using mixed precision training for faster training on modern GPUs
+- The pretrained weights are downloaded automatically from Hugging Face via timm
 
 ## License
 

@@ -7,6 +7,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+try:
+    import timm
+    TIMM_AVAILABLE = True
+except ImportError:
+    TIMM_AVAILABLE = False
+    print("Warning: timm library not available. Pretrained weights cannot be loaded.")
 
 
 class PatchEmbedding(nn.Module):
@@ -213,9 +219,14 @@ class VisionTransformer(nn.Module):
         return logits
 
 
-def vit_base_patch16_224(num_classes=1000):
-    """ViT-Base/16 model"""
-    return VisionTransformer(
+def vit_base_patch16_224(num_classes=1000, pretrained=False):
+    """ViT-Base/16 model
+    
+    Args:
+        num_classes: Number of output classes
+        pretrained: If True, load pretrained weights from timm
+    """
+    model = VisionTransformer(
         img_size=224,
         patch_size=16,
         num_classes=num_classes,
@@ -226,11 +237,23 @@ def vit_base_patch16_224(num_classes=1000):
         dropout=0.0,
         emb_dropout=0.1
     )
+    
+    if pretrained:
+        if not TIMM_AVAILABLE:
+            raise ImportError("timm library is required to load pretrained weights. Install it with: pip install timm")
+        load_pretrained_weights(model, 'vit_base_patch16_224', num_classes)
+    
+    return model
 
 
-def vit_large_patch16_224(num_classes=1000):
-    """ViT-Large/16 model"""
-    return VisionTransformer(
+def vit_large_patch16_224(num_classes=1000, pretrained=False):
+    """ViT-Large/16 model
+    
+    Args:
+        num_classes: Number of output classes
+        pretrained: If True, load pretrained weights from timm
+    """
+    model = VisionTransformer(
         img_size=224,
         patch_size=16,
         num_classes=num_classes,
@@ -241,11 +264,23 @@ def vit_large_patch16_224(num_classes=1000):
         dropout=0.0,
         emb_dropout=0.1
     )
+    
+    if pretrained:
+        if not TIMM_AVAILABLE:
+            raise ImportError("timm library is required to load pretrained weights. Install it with: pip install timm")
+        load_pretrained_weights(model, 'vit_large_patch16_224', num_classes)
+    
+    return model
 
 
-def vit_small_patch16_224(num_classes=1000):
-    """ViT-Small/16 model"""
-    return VisionTransformer(
+def vit_small_patch16_224(num_classes=1000, pretrained=False):
+    """ViT-Small/16 model
+    
+    Args:
+        num_classes: Number of output classes
+        pretrained: If True, load pretrained weights from timm
+    """
+    model = VisionTransformer(
         img_size=224,
         patch_size=16,
         num_classes=num_classes,
@@ -256,4 +291,91 @@ def vit_small_patch16_224(num_classes=1000):
         dropout=0.0,
         emb_dropout=0.1
     )
+    
+    if pretrained:
+        if not TIMM_AVAILABLE:
+            raise ImportError("timm library is required to load pretrained weights. Install it with: pip install timm")
+        load_pretrained_weights(model, 'vit_small_patch16_224', num_classes)
+    
+    return model
+
+
+def load_pretrained_weights(model, timm_model_name, num_classes):
+    """Load pretrained weights from timm library
+    
+    Args:
+        model: Our VisionTransformer model
+        timm_model_name: Name of the model in timm (e.g., 'vit_base_patch16_224')
+        num_classes: Number of classes for the final classification head
+    """
+    if not TIMM_AVAILABLE:
+        raise ImportError("timm library is required. Install it with: pip install timm")
+    
+    print(f"Loading pretrained weights from timm: {timm_model_name}")
+    
+    # Load pretrained model from timm
+    pretrained_model = timm.create_model(timm_model_name, pretrained=True, num_classes=1000)
+    
+    # Get state dicts
+    our_state_dict = model.state_dict()
+    pretrained_state_dict = pretrained_model.state_dict()
+    
+    # Try to load matching weights
+    loaded_keys = []
+    missing_keys = []
+    shape_mismatch_keys = []
+    
+    for key in our_state_dict.keys():
+        if key in pretrained_state_dict:
+            if our_state_dict[key].shape == pretrained_state_dict[key].shape:
+                our_state_dict[key] = pretrained_state_dict[key]
+                loaded_keys.append(key)
+            else:
+                shape_mismatch_keys.append(key)
+        else:
+            missing_keys.append(key)
+    
+    # Handle classification head separately (may have different num_classes)
+    if 'head.weight' in pretrained_state_dict and 'head.bias' in pretrained_state_dict:
+        pretrained_head_weight = pretrained_state_dict['head.weight']
+        pretrained_head_bias = pretrained_state_dict['head.bias']
+        
+        if num_classes == 1000:
+            # Same number of classes, should already be loaded
+            if 'head.weight' not in loaded_keys:
+                our_state_dict['head.weight'] = pretrained_head_weight
+                our_state_dict['head.bias'] = pretrained_head_bias
+                loaded_keys.extend(['head.weight', 'head.bias'])
+        else:
+            # Different number of classes, initialize appropriately
+            if num_classes <= pretrained_head_weight.shape[0]:
+                # Take first num_classes from pretrained head
+                our_state_dict['head.weight'] = pretrained_head_weight[:num_classes]
+                our_state_dict['head.bias'] = pretrained_head_bias[:num_classes]
+                if 'head.weight' in loaded_keys:
+                    loaded_keys.remove('head.weight')
+                if 'head.bias' in loaded_keys:
+                    loaded_keys.remove('head.bias')
+                loaded_keys.extend(['head.weight (partial)', 'head.bias (partial)'])
+            else:
+                # Initialize new head with pretrained weights (copy first 1000 classes)
+                our_state_dict['head.weight'][:1000] = pretrained_head_weight
+                our_state_dict['head.bias'][:1000] = pretrained_head_bias
+                if 'head.weight' in loaded_keys:
+                    loaded_keys.remove('head.weight')
+                if 'head.bias' in loaded_keys:
+                    loaded_keys.remove('head.bias')
+                loaded_keys.extend(['head.weight (extended)', 'head.bias (extended)'])
+    
+    # Load the state dict
+    model.load_state_dict(our_state_dict, strict=False)
+    
+    print(f"Successfully loaded {len(loaded_keys)} pretrained layers")
+    if shape_mismatch_keys:
+        print(f"Warning: {len(shape_mismatch_keys)} layers have shape mismatches (not loaded)")
+    if missing_keys:
+        print(f"Note: {len(missing_keys)} layers not found in pretrained model (using random initialization)")
+    print(f"Classification head initialized for {num_classes} classes")
+    
+    return model
 

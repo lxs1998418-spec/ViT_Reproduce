@@ -15,14 +15,20 @@ import json
 from model import vit_base_patch16_224, vit_small_patch16_224, vit_large_patch16_224
 
 
-def get_model(model_name, num_classes):
-    """Get model by name"""
+def get_model(model_name, num_classes, pretrained=False):
+    """Get model by name
+    
+    Args:
+        model_name: Name of the model ('vit_small', 'vit_base', 'vit_large')
+        num_classes: Number of output classes
+        pretrained: If True, load pretrained weights
+    """
     if model_name == 'vit_base':
-        return vit_base_patch16_224(num_classes=num_classes)
+        return vit_base_patch16_224(num_classes=num_classes, pretrained=pretrained)
     elif model_name == 'vit_small':
-        return vit_small_patch16_224(num_classes=num_classes)
+        return vit_small_patch16_224(num_classes=num_classes, pretrained=pretrained)
     elif model_name == 'vit_large':
-        return vit_large_patch16_224(num_classes=num_classes)
+        return vit_large_patch16_224(num_classes=num_classes, pretrained=pretrained)
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
@@ -165,6 +171,8 @@ def main():
                         help='Image size')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume from')
+    parser.add_argument('--pretrained', action='store_true',
+                        help='Load pretrained weights from timm')
     
     args = parser.parse_args()
     
@@ -187,7 +195,9 @@ def main():
     
     # Model
     print(f'Creating model: {args.model}')
-    model = get_model(args.model, num_classes)
+    if args.pretrained:
+        print('Loading pretrained weights from timm...')
+    model = get_model(args.model, num_classes, pretrained=args.pretrained)
     model = model.to(device)
     
     # Loss and optimizer
