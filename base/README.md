@@ -18,6 +18,8 @@ This implementation supports both training from scratch and loading pretrained w
 
 ## Installation
 
+### Local Installation
+
 1. Clone this repository:
 ```bash
 git clone <repository-url>
@@ -27,6 +29,24 @@ cd ViT_Reproduce
 2. Install dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+### Google Colab
+
+For running on Google Colab, see [COLAB_GUIDE.md](../COLAB_GUIDE.md) or use the provided notebook `ViT_Colab_Example.ipynb`.
+
+Quick start in Colab:
+```python
+# Install dependencies
+!pip install -q torch torchvision numpy Pillow matplotlib tqdm scipy timm
+
+# Clone or upload project
+!git clone https://github.com/yourusername/ViT_Reproduce.git
+%cd ViT_Reproduce
+
+# Setup paths
+import sys
+sys.path.append('/content/ViT_Reproduce/base')
 ```
 
 ## Dataset Preparation
@@ -118,6 +138,35 @@ python eval.py \
 - `--img_size`: Image size (default: 224)
 - `--pretrained`: Use pretrained weights from timm (ignores `--checkpoint`)
 
+### CIFAR-10 Evaluation
+
+**Evaluate on CIFAR-10 test set using pretrained weights:**
+```bash
+python eval_cifar10.py \
+    --pretrained \
+    --model vit_base \
+    --batch_size 32
+```
+
+**Evaluate on CIFAR-10 using a trained checkpoint:**
+```bash
+python eval_cifar10.py \
+    --checkpoint ./checkpoints/best.pth \
+    --model vit_base \
+    --batch_size 32
+```
+
+**Arguments for CIFAR-10 evaluation:**
+- `--checkpoint`: Path to model checkpoint (optional if using `--pretrained`)
+- `--model`: Model architecture (`vit_small`, `vit_base`, or `vit_large`)
+- `--batch_size`: Batch size for evaluation (default: 32)
+- `--num_workers`: Number of data loading workers (default: 4)
+- `--img_size`: Image size (default: 224)
+- `--pretrained`: Use pretrained weights from timm (ignores `--checkpoint`)
+- `--train_set`: Evaluate on training set instead of test set (default: False)
+
+**Note:** CIFAR-10 images are 32x32, which will be automatically resized to 224x224 for ViT. The dataset will be automatically downloaded on first use.
+
 ### Model Architectures
 
 The implementation supports three model sizes:
@@ -153,9 +202,9 @@ During training, the following checkpoints are saved:
 - `best.pth`: Best checkpoint based on validation accuracy
 - `history.json`: Training history (loss and accuracy)
 
-## Example
+## Examples
 
-Train ViT-Base on ImageNet-style dataset:
+### Train ViT-Base on ImageNet-style dataset:
 
 ```bash
 python train.py \
@@ -167,6 +216,20 @@ python train.py \
     --warmup_epochs 10 \
     --save_dir ./checkpoints
 ```
+
+### Evaluate on CIFAR-10 with pretrained weights:
+
+```bash
+python eval_cifar10.py \
+    --pretrained \
+    --model vit_base \
+    --batch_size 64
+```
+
+This will automatically download CIFAR-10 dataset and evaluate the pretrained ViT-Base model on it. The script will show:
+- Overall accuracy
+- Per-class accuracy for all 10 CIFAR-10 classes
+- Confusion matrix
 
 ## Pretrained Weights
 
