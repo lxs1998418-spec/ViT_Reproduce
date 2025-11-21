@@ -1,8 +1,21 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import timm
-
+try:
+    import timm
+except ImportError:
+    print("Warning: 'timm' library not found. Please install it using: pip install timm")
+    timm = None
+import argparse
+import os
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm is missing
+    print("Warning: 'tqdm' not found. Progress bars will be disabled.")
+    def tqdm(x, desc=None): return x
 
 
 class PatchEmbedding(nn.Module):
@@ -114,10 +127,6 @@ class TransformerBlock(nn.Module):
         return x
 
 
-
-
-
-
 class VisionTransformer(nn.Module):
     """Vision Transformer Model"""
     
@@ -213,3 +222,170 @@ class VisionTransformer(nn.Module):
         class_vectors = self.head(cls_token_final)  
         
         return class_vectors
+
+
+def load_pretrained_weights(model, timm_model_name, num_classes):
+    """Load pretrained weights from timm library
+    
+    Args:
+        model: my VisionTransformer model
+        timm_model_name: Name of the model in timm (e.g., 'vit_base_patch16_224')
+        num_classes: Number of classes for the final classification head
+    """
+    print(f"Loading pretrained weights from timm: {timm_model_name}")
+    
+    # Load pretrained model from timm
+    pretrained_model = timm.create_model(timm_model_name, pretrained=True, num_classes=1000)
+    
+    # Get state dicts
+    our_state_dict = model.state_dict()
+    pretrained_state_dict = pretrained_model.state_dict()
+    
+    # Try to load matching weights
+    loaded_keys = []
+    missing_keys = []
+    shape_mismatch_keys = []
+    
+    for key in our_state_dict.keys():
+        if key in pretrained_state_dict:
+            if our_state_dict[key].shape == pretrained_state_dict[key].shape:
+                our_state_dict[key] = pretrained_state_dict[key]
+                loaded_keys.append(key)
+            else:
+                shape_mismatch_keys.append(key)
+        else:
+            missing_keys.append(key)
+    
+    # Handle classification head separately
+    if 'head.weight' in pretrained_state_dict and 'head.bias' in pretrained_state_dict:
+        pretrained_head_weight = pretrained_state_dict['head.weight']
+        pretrained_head_bias = pretrained_state_dict['head.bias']
+        
+        if num_classes == 1000:
+            if 'head.weight' not in loaded_keys:
+                our_state_dict['head.weight'] = pretrained_head_weight
+                our_state_dict['head.bias'] = pretrained_head_bias
+                loaded_keys.extend(['head.weight', 'head.bias'])
+        else:
+            # Initialize head for different number of classes
+            # If pretrained has enough classes, we can take the first N (not always meaningful but better than random)
+            # Or just leave it random (which is what happens if we don't set it)
+            # For Transfer Learning, usually we re-init the head.
+            # But we can copy common weights if we want.
+            print(f"Note: Re-initializing head for {num_classes} classes (pretrained had {pretrained_head_weight.shape[0]})")
+            # We don't load head weights if classes don't match
+            pass
+            
+    # Load the state dict
+    model.load_state_dict(our_state_dict, strict=False)
+    
+    print(f"Successfully loaded {len(loaded_keys)} pretrained layers")
+    if shape_mismatch_keys:
+        print(f"Warning: {len(shape_mismatch_keys)} layers have shape mismatches (not loaded): {shape_mismatch_keys}")
+    
+    return model
+
+
+def get_dataloader(dataset_name='cifar10', batch_size=32, num_workers=2, img_size=224, train=False):
+    """Get DataLoader for CIFAR-10 or CIFAR-100"""
+    
+    # Transform: Resize to 224x224 for ViT, ImageNet normalization
+    transform = transforms.Compose([
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    root = './data'
+    if dataset_name.lower() == 'cifar10':
+        dataset = datasets.CIFAR10(root=root, train=train, download=True, transform=transform)
+        classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    elif dataset_name.lower() == 'cifar100':
+        dataset = datasets.CIFAR100(root=root, train=train, download=True, transform=transform)
+        classes = [str(i) for i in range(100)] # CIFAR-100 has 100 classes
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+    
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    return loader, classes
+
+
+def evaluate_model(model, data_loader, device, classes):
+    """Evaluate model"""
+    model.eval()
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for images, labels in tqdm(data_loader, desc='Evaluating'):
+            images, labels = images.to(device), labels.to(device)
+            
+            outputs = model(images)
+            _, predicted = outputs.max(1)
+            
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+            
+    acc = 100. * correct / total
+    print(f'Accuracy: {acc:.2f}%')
+    return acc
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Evaluate ViT on CIFAR-10/100')
+    parser.add_argument('--dataset', type=str, default='all', choices=['cifar10', 'cifar100', 'all'],
+                        help='Dataset to evaluate on')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--model_name', type=str, default='vit_base_patch16_224', help='timm model name')
+    args = parser.parse_args()
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    
+    datasets_to_eval = []
+    if args.dataset == 'all':
+        datasets_to_eval = ['cifar10', 'cifar100']
+    else:
+        datasets_to_eval = [args.dataset]
+        
+    for ds_name in datasets_to_eval:
+        print(f"\n{'='*20} Evaluating on {ds_name.upper()} {'='*20}")
+        
+        if ds_name == 'cifar10':
+            num_classes = 10
+        else:
+            num_classes = 100
+            
+        # Create model
+        print(f"Creating model {args.model_name} for {num_classes} classes...")
+        model = VisionTransformer(
+            img_size=224,
+            patch_size=16,
+            in_channels=3,
+            num_classes=num_classes,
+            embed_dim=768,
+            depth=12,
+            num_heads=12,
+            mlp_ratio=4.0
+        )
+        
+        # Load weights
+        model = load_pretrained_weights(model, args.model_name, num_classes)
+        model = model.to(device)
+        
+        # Load data
+        print(f"Loading {ds_name} test set...")
+        loader, classes = get_dataloader(ds_name, batch_size=args.batch_size, train=False)
+        
+        # Evaluate
+        evaluate_model(model, loader, device, classes)
+
+if __name__ == '__main__':
+    main()
