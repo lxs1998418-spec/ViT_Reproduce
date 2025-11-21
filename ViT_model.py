@@ -358,53 +358,336 @@ def evaluate_model(model, data_loader, device, classes):
     return acc
 
 
+def get_dataloader_with_augmentation(dataset_name='cifar10', batch_size=32, num_workers=2, img_size=224, train=True):
+    """Get DataLoader with data augmentation for training"""
+    
+    if train:
+        # Training: use data augmentation
+        transform = transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomCrop(img_size, padding=4),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    else:
+        # Validation/Test: no augmentation
+        transform = transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    
+    root = './data'
+    if dataset_name.lower() == 'cifar10':
+        dataset = datasets.CIFAR10(root=root, train=train, download=True, transform=transform)
+        classes = ['plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+    elif dataset_name.lower() == 'cifar100':
+        dataset = datasets.CIFAR100(root=root, train=train, download=True, transform=transform)
+        classes = [str(i) for i in range(100)]
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+    
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=train,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    
+    return loader, classes
+
+
+def train_epoch(model, train_loader, criterion, optimizer, device, epoch):
+    """Train for one epoch"""
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    
+    pbar = tqdm(train_loader, desc=f'Epoch {epoch} [Train]')
+    for images, labels in pbar:
+        images, labels = images.to(device), labels.to(device)
+        
+        # Forward pass
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        
+        # Backward pass
+        loss.backward()
+        optimizer.step()
+        
+        # Statistics
+        running_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+        
+        # Update progress bar
+        pbar.set_postfix({
+            'loss': f'{loss.item():.4f}',
+            'acc': f'{100.*correct/total:.2f}%'
+        })
+    
+    epoch_loss = running_loss / len(train_loader)
+    epoch_acc = 100. * correct / total
+    return epoch_loss, epoch_acc
+
+
+def validate_epoch(model, val_loader, criterion, device):
+    """Validate for one epoch"""
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        pbar = tqdm(val_loader, desc='[Val]')
+        for images, labels in pbar:
+            images, labels = images.to(device), labels.to(device)
+            
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            
+            running_loss += loss.item()
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+            
+            pbar.set_postfix({
+                'loss': f'{loss.item():.4f}',
+                'acc': f'{100.*correct/total:.2f}%'
+            })
+    
+    epoch_loss = running_loss / len(val_loader)
+    epoch_acc = 100. * correct / total
+    return epoch_loss, epoch_acc
+
+
+def fine_tune_model(
+    model,
+    dataset_name='cifar10',
+    epochs=10,
+    batch_size=64,
+    learning_rate=1e-4,
+    weight_decay=0.01,
+    freeze_backbone=False,
+    device='cuda',
+    save_path='best_model.pth'
+):
+    """
+    Fine-tune the model on CIFAR10/CIFAR100
+    
+    Args:
+        model: The VisionTransformer model
+        dataset_name: 'cifar10' or 'cifar100'
+        epochs: Number of training epochs
+        batch_size: Batch size for training
+        learning_rate: Learning rate
+        weight_decay: Weight decay for optimizer
+        freeze_backbone: If True, only train the classification head
+        device: Device to train on
+        save_path: Path to save the best model
+    """
+    print(f"\n{'='*60}")
+    print(f"Fine-tuning on {dataset_name.upper()}")
+    print(f"{'='*60}")
+    print(f"Epochs: {epochs}")
+    print(f"Batch size: {batch_size}")
+    print(f"Learning rate: {learning_rate}")
+    print(f"Freeze backbone: {freeze_backbone}")
+    print(f"{'='*60}\n")
+    
+    # Freeze backbone if requested
+    if freeze_backbone:
+        print("Freezing backbone, only training classification head...")
+        for name, param in model.named_parameters():
+            if 'head' not in name:
+                param.requires_grad = False
+        # Count trainable parameters
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"Trainable parameters: {trainable_params:,} / {total_params:,} ({100.*trainable_params/total_params:.2f}%)")
+    else:
+        print("Training entire model (end-to-end fine-tuning)...")
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Trainable parameters: {trainable_params:,}")
+    
+    # Get data loaders
+    print("\nLoading datasets...")
+    train_loader, classes = get_dataloader_with_augmentation(
+        dataset_name, batch_size=batch_size, num_workers=2, train=True
+    )
+    val_loader, _ = get_dataloader_with_augmentation(
+        dataset_name, batch_size=batch_size, num_workers=2, train=False
+    )
+    
+    # Loss and optimizer
+    criterion = nn.CrossEntropyLoss()
+    
+    # Use different learning rates for backbone and head if not freezing
+    if freeze_backbone:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=learning_rate,
+            weight_decay=weight_decay
+        )
+    else:
+        # Use smaller LR for backbone, larger for head
+        backbone_params = []
+        head_params = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                if 'head' in name:
+                    head_params.append(param)
+                else:
+                    backbone_params.append(param)
+        
+        optimizer = torch.optim.AdamW([
+            {'params': backbone_params, 'lr': learning_rate * 0.1},  # Smaller LR for pretrained
+            {'params': head_params, 'lr': learning_rate}  # Normal LR for new head
+        ], weight_decay=weight_decay)
+        print(f"Using different LRs: backbone={learning_rate*0.1}, head={learning_rate}")
+    
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=epochs, eta_min=learning_rate * 0.01
+    )
+    
+    # Training loop
+    best_val_acc = 0.0
+    train_losses, train_accs = [], []
+    val_losses, val_accs = [], []
+    
+    print(f"\nStarting training...\n")
+    for epoch in range(1, epochs + 1):
+        # Train
+        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, epoch)
+        train_losses.append(train_loss)
+        train_accs.append(train_acc)
+        
+        # Validate
+        val_loss, val_acc = validate_epoch(model, val_loader, criterion, device)
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+        
+        # Update learning rate
+        scheduler.step()
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # Print epoch summary
+        print(f"\nEpoch {epoch}/{epochs} Summary:")
+        print(f"  Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+        print(f"  Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
+        print(f"  Learning Rate: {current_lr:.6f}")
+        
+        # Save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_acc': val_acc,
+                'train_acc': train_acc,
+            }, save_path)
+            print(f"  ✓ Saved best model (Val Acc: {val_acc:.2f}%)")
+        
+        print("-" * 60)
+    
+    print(f"\n{'='*60}")
+    print(f"Training completed!")
+    print(f"Best validation accuracy: {best_val_acc:.2f}%")
+    print(f"Model saved to: {save_path}")
+    print(f"{'='*60}\n")
+    
+    return {
+        'train_losses': train_losses,
+        'train_accs': train_accs,
+        'val_losses': val_losses,
+        'val_accs': val_accs,
+        'best_val_acc': best_val_acc
+    }
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate ViT on CIFAR-10/100')
-    parser.add_argument('--dataset', type=str, default='all', choices=['cifar10', 'cifar100', 'all'],
-                        help='Dataset to evaluate on')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser = argparse.ArgumentParser(description='Train or Evaluate ViT on CIFAR-10/100')
+    parser.add_argument('--mode', type=str, default='eval', choices=['train', 'eval'],
+                        help='Mode: train (fine-tune) or eval (evaluate only)')
+    parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'cifar100'],
+                        help='Dataset to use')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--model_name', type=str, default='vit_base_patch16_224', help='timm model name')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs (for train mode)')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate (for train mode)')
+    parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay (for train mode)')
+    parser.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone, only train head (for train mode)')
+    parser.add_argument('--checkpoint', type=str, default=None, help='Path to checkpoint to load (for eval mode)')
     args = parser.parse_args()
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
-    datasets_to_eval = []
-    if args.dataset == 'all':
-        datasets_to_eval = ['cifar10', 'cifar100']
+    # Determine number of classes
+    if args.dataset == 'cifar10':
+        num_classes = 10
     else:
-        datasets_to_eval = [args.dataset]
-        
-    for ds_name in datasets_to_eval:
-        print(f"\n{'='*20} Evaluating on {ds_name.upper()} {'='*20}")
-        
-        if ds_name == 'cifar10':
-            num_classes = 10
-        else:
-            num_classes = 100
-            
-        # Create model
-        print(f"Creating model {args.model_name} for {num_classes} classes...")
-        model = VisionTransformer(
-            img_size=224,
-            patch_size=16,
-            in_channels=3,
-            num_classes=num_classes,
-            embed_dim=768,
-            depth=12,
-            num_heads=12,
-            mlp_ratio=4.0
-        )
-        
-        # Load weights
+        num_classes = 100
+    
+    # Create model
+    print(f"\nCreating model {args.model_name} for {num_classes} classes...")
+    model = VisionTransformer(
+        img_size=224,
+        patch_size=16,
+        in_channels=3,
+        num_classes=num_classes,
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        mlp_ratio=4.0
+    )
+    
+    if args.mode == 'train':
+        # Training mode
+        # Load pretrained weights
         model = load_pretrained_weights(model, args.model_name, num_classes)
         model = model.to(device)
         
-        # Load data
-        print(f"Loading {ds_name} test set...")
-        loader, classes = get_dataloader(ds_name, batch_size=args.batch_size, train=False)
+        # Fine-tune
+        save_path = f'vit_{args.dataset}_best.pth'
+        history = fine_tune_model(
+            model=model,
+            dataset_name=args.dataset,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            freeze_backbone=args.freeze_backbone,
+            device=device,
+            save_path=save_path
+        )
+        print(f"Training completed! Best validation accuracy: {history['best_val_acc']:.2f}%")
+        
+    else:
+        # Evaluation mode
+        if args.checkpoint:
+            # Load from checkpoint
+            print(f"Loading checkpoint from {args.checkpoint}...")
+            checkpoint = torch.load(args.checkpoint, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"Loaded model from epoch {checkpoint['epoch']}")
+            print(f"Validation accuracy when saved: {checkpoint['val_acc']:.2f}%")
+        else:
+            # Load pretrained weights (no fine-tuning)
+            model = load_pretrained_weights(model, args.model_name, num_classes)
+        
+        model = model.to(device)
         
         # Evaluate
+        print(f"\n{'='*20} Evaluating on {args.dataset.upper()} {'='*20}")
+        loader, classes = get_dataloader(args.dataset, batch_size=args.batch_size, train=False)
         evaluate_model(model, loader, device, classes)
 
 if __name__ == '__main__':
