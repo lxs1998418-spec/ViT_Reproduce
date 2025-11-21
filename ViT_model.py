@@ -231,6 +231,9 @@ def load_pretrained_weights(model, timm_model_name, num_classes):
         model: my VisionTransformer model
         timm_model_name: Name of the model in timm (e.g., 'vit_base_patch16_224')
         num_classes: Number of classes for the final classification head
+    
+    Note: If num_classes != 1000, the classification head will be randomly initialized.
+    This means you MUST fine-tune the model on your target dataset for good performance.
     """
     print(f"Loading pretrained weights from timm: {timm_model_name}")
     
@@ -240,6 +243,16 @@ def load_pretrained_weights(model, timm_model_name, num_classes):
     # Get state dicts
     our_state_dict = model.state_dict()
     pretrained_state_dict = pretrained_model.state_dict()
+    
+    # Debug: Print key names to understand the structure
+    print(f"\nDebug: Our model has {len(our_state_dict)} parameters")
+    print(f"Debug: Pretrained model has {len(pretrained_state_dict)} parameters")
+    print(f"Debug: Sample our keys (first 10):")
+    for i, key in enumerate(list(our_state_dict.keys())[:10]):
+        print(f"  {i+1}. {key}")
+    print(f"Debug: Sample pretrained keys (first 10):")
+    for i, key in enumerate(list(pretrained_state_dict.keys())[:10]):
+        print(f"  {i+1}. {key}")
     
     # Try to load matching weights
     loaded_keys = []
@@ -252,7 +265,7 @@ def load_pretrained_weights(model, timm_model_name, num_classes):
                 our_state_dict[key] = pretrained_state_dict[key]
                 loaded_keys.append(key)
             else:
-                shape_mismatch_keys.append(key)
+                shape_mismatch_keys.append(f"{key} (our: {our_state_dict[key].shape} vs pretrained: {pretrained_state_dict[key].shape})")
         else:
             missing_keys.append(key)
     
@@ -267,21 +280,28 @@ def load_pretrained_weights(model, timm_model_name, num_classes):
                 our_state_dict['head.bias'] = pretrained_head_bias
                 loaded_keys.extend(['head.weight', 'head.bias'])
         else:
-            # Initialize head for different number of classes
-            # If pretrained has enough classes, we can take the first N (not always meaningful but better than random)
-            # Or just leave it random (which is what happens if we don't set it)
-            # For Transfer Learning, usually we re-init the head.
-            # But we can copy common weights if we want.
             print(f"Note: Re-initializing head for {num_classes} classes (pretrained had {pretrained_head_weight.shape[0]})")
-            # We don't load head weights if classes don't match
-            pass
+            print(f"WARNING: Classification head is randomly initialized. Model MUST be fine-tuned for good performance!")
             
     # Load the state dict
     model.load_state_dict(our_state_dict, strict=False)
     
-    print(f"Successfully loaded {len(loaded_keys)} pretrained layers")
+    print(f"\nSuccessfully loaded {len(loaded_keys)} pretrained layers")
+    if missing_keys:
+        print(f"Warning: {len(missing_keys)} keys not found in pretrained model (first 5): {missing_keys[:5]}")
     if shape_mismatch_keys:
-        print(f"Warning: {len(shape_mismatch_keys)} layers have shape mismatches (not loaded): {shape_mismatch_keys}")
+        print(f"Warning: {len(shape_mismatch_keys)} layers have shape mismatches (first 3):")
+        for mismatch in shape_mismatch_keys[:3]:
+            print(f"  {mismatch}")
+    
+    # Critical check: verify key layers were loaded
+    critical_keys = ['patch_embed.proj.weight', 'pos_embed', 'cls_token']
+    print(f"\nCritical layer check:")
+    for key in critical_keys:
+        if key in loaded_keys:
+            print(f"  ✓ Loaded: {key}")
+        else:
+            print(f"  ✗ WARNING: NOT loaded: {key}")
     
     return model
 
